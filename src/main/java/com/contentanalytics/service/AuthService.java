@@ -1,0 +1,229 @@
+package com.contentanalytics.service;
+
+import com.contentanalytics.dto.LoginRequestDto;
+import com.contentanalytics.dto.RegisterRequestDto;
+import com.contentanalytics.dto.TokenRefreshRequestDto;
+import com.contentanalytics.dto.TokenResponseDto;
+import com.contentanalytics.entity.User;
+import com.contentanalytics.entity.UserRole;
+import com.contentanalytics.entity.UserStatus;
+import com.contentanalytics.exception.InvalidTokenException;
+import com.contentanalytics.exception.UserAlreadyExistsException;
+import com.contentanalytics.exception.UserNotFoundException;
+import com.contentanalytics.repository.UserRepository;
+import com.contentanalytics.security.JwtTokenProvider;
+import io.jsonwebtoken.Claims;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+@Transactional
+public class AuthService {
+
+    private final UserRepository userRepository;
+    private final JwtTokenProvider jwtTokenProvider;
+    private final PasswordEncoder passwordEncoder;
+
+    @Value("${app.jwt.refresh.expiration}")
+    private long refreshTokenExpirationMs;
+
+    /**
+     * Register new user
+     * Validates input, checks for duplicates, hashes password
+     */
+    public TokenResponseDto register(RegisterRequestDto request) {
+        // Check if username exists
+        if (userRepository.existsByUsername(request.getUsername())) {
+            log.warn("Registration attempt with existing username: {}", request.getUsername());
+            throw new UserAlreadyExistsException("Username already exists");
+        }
+
+        // Check if email exists
+        if (userRepository.existsByEmail(request.getEmail())) {
+            log.warn("Registration attempt with existing email: {}", request.getEmail());
+            throw new UserAlreadyExistsException("Email already exists");
+        }
+
+        // Create new user
+        User user = User.builder()
+                .username(request.getUsername())
+                .email(request.getEmail())
+                .password(passwordEncoder.encode(request.getPassword()))
+                .firstName(request.getFirstName())
+                .lastName(request.getLastName())
+                .role(UserRole.USER) // Default role
+                .status(UserStatus.ACTIVE) // Auto-activate (consider email verification in future)
+                .tokenVersion(1)
+                .emailVerified(false) // Should be verified via email link
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build();
+
+        user = userRepository.save(user);
+        log.info("New user registered: {} ({})", user.getUsername(), user.getId());
+
+        // Generate tokens
+        return generateTokenResponse(user);
+    }
+
+    /**
+     * Login user
+     * Validates credentials, updates last login time
+     */
+    public TokenResponseDto login(LoginRequestDto request) {
+        // Find user by username
+        User user = userRepository.findByUsername(request.getUsername())
+                .orElseThrow(() -> {
+                    log.warn("Login attempt with non-existent username: {}", request.getUsername());
+                    return new UserNotFoundException("Invalid credentials");
+                });
+
+        // Check if user is active
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            log.warn("Login attempt with inactive user: {} (status: {})", user.getUsername(), user.getStatus());
+            throw new InvalidTokenException("User account is not active");
+        }
+
+        // Verify password
+        if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+            log.warn("Failed login attempt for user: {}", request.getUsername());
+            throw new InvalidTokenException("Invalid credentials");
+        }
+
+        // Update last login time
+        user.setLastLoginAt(LocalDateTime.now());
+        userRepository.save(user);
+        log.info("User logged in: {}", user.getUsername());
+
+        // Generate tokens
+        return generateTokenResponse(user);
+    }
+
+    /**
+     * Refresh access token using refresh token
+     * Implements token rotation - invalidates old token
+     */
+    public TokenResponseDto refreshAccessToken(TokenRefreshRequestDto request) {
+        String refreshToken = request.getRefreshToken();
+
+        // Validate refresh token
+        if (!jwtTokenProvider.validateToken(refreshToken)) {
+            log.warn("Invalid refresh token used");
+            throw new InvalidTokenException("Invalid or expired refresh token");
+        }
+
+        // Check that it's actually a refresh token
+        if (!jwtTokenProvider.isRefreshToken(refreshToken)) {
+            log.warn("Access token used instead of refresh token");
+            throw new InvalidTokenException("Invalid token type - refresh token expected");
+        }
+
+        // Extract user ID from token
+        String userId = jwtTokenProvider.getUserIdFromToken(refreshToken);
+        String username = jwtTokenProvider.getUsernameFromToken(refreshToken);
+
+        // Find user in database
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> {
+                    log.warn("Refresh token used for non-existent user: {}", userId);
+                    return new UserNotFoundException("User not found");
+                });
+
+        // Verify user is still active
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            log.warn("Refresh attempt by inactive user: {}", username);
+            throw new InvalidTokenException("User account is not active");
+        }
+
+        // Token rotation: verify tokenVersion matches
+        // If password changed, tokenVersion incremented, invalidating old tokens
+        Claims claims = jwtTokenProvider.getClaimsFromToken(refreshToken);
+        Integer tokenVersion = ((Number) claims.get("tokenVersion")).intValue();
+
+        if (!tokenVersion.equals(user.getTokenVersion())) {
+            log.warn("Token rotation detected - old token used after password change: {}", username);
+            throw new InvalidTokenException("Token has been invalidated - please login again");
+        }
+
+        log.info("Access token refreshed for user: {}", username);
+
+        // Generate NEW access token (new refresh token optional - can implement true rotation)
+        return generateTokenResponse(user);
+    }
+
+    /**
+     * Logout user
+     * In token-based auth, we just invalidate on client side
+     * But we can track it server-side if needed
+     */
+    @CacheEvict(value = "user", key = "#userId")
+    public void logout(String userId) {
+        log.info("User logged out: {}", userId);
+        // Cache is cleared, forcing re-fetch on next request
+    }
+
+    /**
+     * Invalidate all tokens for a user (password change, security incident)
+     * Increments tokenVersion - all old tokens become invalid
+     */
+    @CacheEvict(value = "user", key = "#userId")
+    public void invalidateAllTokens(String userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new UserNotFoundException("User not found"));
+
+        user.setTokenVersion(user.getTokenVersion() + 1);
+        user.setLastPasswordChangeAt(LocalDateTime.now());
+        userRepository.save(user);
+
+        log.info("All tokens invalidated for user: {} (new version: {})", user.getUsername(), user.getTokenVersion());
+    }
+
+    /**
+     * Get user by ID (cached for performance)
+     */
+    @Cacheable(value = "user", key = "#userId", unless = "#result == null")
+    public User getUserById(String userId) {
+        return userRepository.findById(userId)
+                .orElseThrow(() -> new UserNotFoundException("User not found"));
+    }
+
+    /**
+     * Get current authenticated user
+     */
+    public User getCurrentUser(String username) {
+        return userRepository.findByUsername(username)
+                .orElseThrow(() -> new UserNotFoundException("User not found"));
+    }
+
+    /**
+     * Generate token response (both access & refresh tokens)
+     * Private helper method
+     */
+    private TokenResponseDto generateTokenResponse(User user) {
+        String accessToken = jwtTokenProvider.generateAccessToken(user.getId(), user.getUsername(), user.getEmail());
+        String refreshToken = jwtTokenProvider.generateRefreshToken(user.getId(), user.getUsername());
+
+        long expiresIn = jwtTokenProvider.getTokenTimeToLive(accessToken);
+
+        return TokenResponseDto.builder()
+                .accessToken(accessToken)
+                .refreshToken(refreshToken)
+                .tokenType("Bearer")
+                .expiresIn(expiresIn)
+                .userId(user.getId())
+                .username(user.getUsername())
+                .email(user.getEmail())
+                .build();
+    }
+
+}
