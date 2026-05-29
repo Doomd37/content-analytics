@@ -106,6 +106,23 @@ public class JwtTokenProvider {
     }
 
     /**
+     * Get token details including user ID
+     */
+    public Map<String, Object> getTokenDetails(String token) {
+        Claims claims = getClaimsFromToken(token);
+        if (claims == null) return null;
+
+        Map<String, Object> details = new HashMap<>();
+        details.put("userId", claims.get("userId"));
+        details.put("username", claims.getSubject());
+        details.put("email", claims.get("email"));
+        details.put("type", claims.get("type"));
+
+        return details;
+    }
+
+
+    /**
      * Validate token signature and expiration
      */
     public boolean validateToken(String token) {

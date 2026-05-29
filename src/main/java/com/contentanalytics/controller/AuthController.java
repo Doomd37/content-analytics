@@ -1,9 +1,7 @@
 package com.contentanalytics.controller;
 
-import com.contentanalytics.dto.LoginRequestDto;
-import com.contentanalytics.dto.RegisterRequestDto;
-import com.contentanalytics.dto.TokenRefreshRequestDto;
-import com.contentanalytics.dto.TokenResponseDto;
+import com.contentanalytics.dto.*;
+import com.contentanalytics.entity.User;
 import com.contentanalytics.service.AuthService;
 import com.contentanalytics.util.CookieUtil;
 import jakarta.servlet.http.HttpServletResponse;
@@ -179,19 +177,20 @@ public class AuthController {
         log.debug("Fetching current user details: {}", username);
 
         // Get user details from service
-        CurrentUserDto userDto = authService.getCurrentUser(username)
-                .let(user -> CurrentUserDto.builder()
-                        .id(user.getId())
-                        .username(user.getUsername())
-                        .email(user.getEmail())
-                        .firstName(user.getFirstName())
-                        .lastName(user.getLastName())
-                        .role(user.getRole().name())
-                        .status(user.getStatus().name())
-                        .emailVerified(user.getEmailVerified())
-                        .createdAt(user.getCreatedAt())
-                        .lastLoginAt(user.getLastLoginAt())
-                        .build());
+        com.contentanalytics.entity.User user = authService.getCurrentUser(username);
+
+        CurrentUserDto userDto = CurrentUserDto.builder()
+                .id(user.getId())
+                .username(user.getUsername())
+                .email(user.getEmail())
+                .firstName(user.getFirstName())
+                .lastName(user.getLastName())
+                .role(user.getRole().name())
+                .status(user.getStatus().name())
+                .emailVerified(user.getEmailVerified())
+                .createdAt(user.getCreatedAt())
+                .lastLoginAt(user.getLastLoginAt())
+                .build();
 
         return ResponseEntity.ok(userDto);
     }
@@ -214,11 +213,9 @@ public class AuthController {
         log.info("Invalidating all tokens for user: {}", username);
 
         // Get user details and invalidate tokens
-        authService.getCurrentUser(username)
-                .let(user -> {
+        User user = authService.getCurrentUser(username);
+
                     authService.invalidateAllTokens(user.getId());
-                    return null;
-                });
 
         // Clear refresh token cookie
         cookieUtil.clearRefreshTokenCookie(response);

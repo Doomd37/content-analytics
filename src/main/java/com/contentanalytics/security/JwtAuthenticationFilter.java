@@ -9,12 +9,15 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 
 @Component
 @RequiredArgsConstructor
@@ -22,6 +25,8 @@ import java.util.ArrayList;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider tokenProvider;
+    private static final String USER_ID_ATTRIBUTE = "userId";
+    private static final String EMAIL_ATTRIBUTE = "email";
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
@@ -42,8 +47,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     UsernamePasswordAuthenticationToken authentication =
                             new UsernamePasswordAuthenticationToken(username, null, new ArrayList<>());
 
-                    // Store user info in authentication object
-                    authentication.setDetails(claims);
+                    // Store user info in authentication details
+                    Map<String, Object> details = new HashMap<>();
+                    details.put(USER_ID_ATTRIBUTE, claims.get("userId"));
+                    details.put(EMAIL_ATTRIBUTE, claims.get("email"));
+                    details.put("username", username);
+
+                    authentication.setDetails(details);
 
                     // Set authentication in security context
                     SecurityContextHolder.getContext().setAuthentication(authentication);
