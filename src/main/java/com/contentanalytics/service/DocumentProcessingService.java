@@ -18,6 +18,7 @@ import java.util.concurrent.CompletableFuture;
 @Transactional
 public class DocumentProcessingService {
 
+    private final WebSocketService webSocketService;
     private final DocumentRepository documentRepository;
     private final FileExtractionService fileExtractionService;
     private final AnthropicService anthropicService;
@@ -38,17 +39,18 @@ public class DocumentProcessingService {
      * Extracts text, analyzes with Claude API
      */
     @Async
-    public CompletableFuture<Void> processDocumentAsync(String documentId) {
-        return CompletableFuture.runAsync(() -> {
-            try {
-                processDocument(documentId);
-            } catch (Exception e) {
-                log.error("Error processing document: {}", documentId, e);
-                updateProcessingStatus(documentId, DocumentStatus.FAILED, 0f, e.getMessage());
-            }
-        });
+    public void processDocumentAsync(String documentId) {
+        try {
+            processDocument(documentId);
+        } catch (Exception e) {
+            log.error("Error processing document: {}", documentId, e);
+            updateProcessingStatus(documentId, DocumentStatus.FAILED, 0f, e.getMessage());
+        }
     }
 
+    /**
+     * Main document processing logic
+     */
     /**
      * Main document processing logic
      */
@@ -59,9 +61,14 @@ public class DocumentProcessingService {
         Document document = documentRepository.findById(documentId)
                 .orElseThrow(() -> new RuntimeException("Document not found: " + documentId));
 
+        String userId = document.getUser().getId();
+
         try {
+            long startTime = System.currentTimeMillis();
+
             // Step 1: Update status to PROCESSING
             updateProcessingStatus(documentId, DocumentStatus.PROCESSING, 10f, null);
+            webSocketService.sendDocumentProgress(userId, documentId, document.getFileName(), 10f, "PROCESSING", "extracting_text");
 
             // Step 2: Extract text from file
             log.debug("Extracting text from document: {}", documentId);
@@ -72,6 +79,7 @@ public class DocumentProcessingService {
             }
 
             updateProcessingStatus(documentId, DocumentStatus.PROCESSING, 30f, null);
+            webSocketService.sendDocumentProgress(userId, documentId, document.getFileName(), 30f, "PROCESSING", "analyzing");
             log.debug("Text extracted. Length: {} characters", extractedText.length());
 
             // Step 3: Analyze with Claude API
@@ -79,6 +87,7 @@ public class DocumentProcessingService {
             DocumentAnalysisResult analysis = anthropicService.analyzeDocument(extractedText);
 
             updateProcessingStatus(documentId, DocumentStatus.PROCESSING, 70f, null);
+            webSocketService.sendDocumentProgress(userId, documentId, document.getFileName(), 70f, "PROCESSING", "saving_results");
             log.debug("Analysis complete for document: {}", documentId);
 
             // Step 4: Update document with results
@@ -95,11 +104,34 @@ public class DocumentProcessingService {
 
             documentRepository.save(document);
 
+            // Send completion update
+            long processingTime = System.currentTimeMillis() - startTime;
+            webSocketService.sendDocumentCompleted(
+                    userId,
+                    documentId,
+                    document.getFileName(),
+                    analysis.getSummary(),
+                    analysis.getKeyTopics(),
+                    analysis.getSentiment(),
+                    analysis.getConfidenceScore(),
+                    document.getWordCount(),
+                    processingTime
+            );
+
             log.info("Document processing completed successfully: {}", documentId);
 
         } catch (Exception e) {
             log.error("Error during document processing: {}", documentId, e);
             updateProcessingStatus(documentId, DocumentStatus.FAILED, 0f, e.getMessage());
+
+            // Send failure update
+            webSocketService.sendDocumentFailed(
+                    userId,
+                    documentId,
+                    document.getFileName(),
+                    e.getMessage(),
+                    "PROCESSING_ERROR"
+            );
         }
     }
 
