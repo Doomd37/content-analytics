@@ -8,21 +8,30 @@ CREATE TABLE users (
     last_name VARCHAR(255),
     role VARCHAR(50) NOT NULL DEFAULT 'USER' CHECK (role IN ('ADMIN', 'USER')),
     status VARCHAR(50) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'INACTIVE', 'BANNED')),
-    token_version INTEGER NOT NULL DEFAULT 1,
+    token_version INTEGER NOT NULL DEFAULT 0,
     email_verified BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    email_verified_at TIMESTAMP,
     last_login_at TIMESTAMP,
-    last_password_change_at TIMESTAMP
+    last_password_reset_at TIMESTAMP,
+    last_password_change_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create indexes for performance
+-- Create indexes
 CREATE INDEX idx_username ON users(username);
 CREATE INDEX idx_email ON users(email);
-CREATE INDEX idx_created_at ON users(created_at);
 CREATE INDEX idx_status ON users(status);
+CREATE INDEX idx_email_verified ON users(email_verified);
+CREATE INDEX idx_created_at ON users(created_at);
 
--- Comment on table
-COMMENT ON TABLE users IS 'User accounts for Content Analytics Platform';
-COMMENT ON COLUMN users.token_version IS 'Used for token rotation - increment on password change to invalidate old tokens';
-COMMENT ON COLUMN users.email_verified IS 'Flag indicating if email has been verified';
+-- Comments
+COMMENT ON TABLE users IS 'User accounts with authentication and profile data';
+COMMENT ON COLUMN users.role IS 'User role: ADMIN or USER';
+COMMENT ON COLUMN users.status IS 'User status: ACTIVE, INACTIVE, or BANNED';
+COMMENT ON COLUMN users.token_version IS 'Used for token rotation when password changes';
+COMMENT ON COLUMN users.email_verified IS 'Whether email has been verified';
+COMMENT ON COLUMN users.email_verified_at IS 'Timestamp when email was verified';
+COMMENT ON COLUMN users.last_login_at IS 'Timestamp of last login';
+COMMENT ON COLUMN users.last_password_reset_at IS 'Timestamp of last password reset';
+COMMENT ON COLUMN users.last_password_change_at IS 'Timestamp of last password change';

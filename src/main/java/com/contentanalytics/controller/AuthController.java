@@ -2,6 +2,8 @@ package com.contentanalytics.controller;
 
 import com.contentanalytics.dto.*;
 import com.contentanalytics.entity.User;
+import com.contentanalytics.exception.InvalidTokenException;
+import com.contentanalytics.exception.UserNotFoundException;
 import com.contentanalytics.service.AuthService;
 import com.contentanalytics.util.CookieUtil;
 import jakarta.servlet.http.HttpServletResponse;
@@ -13,6 +15,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
+import com.contentanalytics.dto.VerifyEmailRequestDto;
+import com.contentanalytics.dto.ResendVerificationEmailRequestDto;
+import com.contentanalytics.dto.ForgotPasswordRequestDto;
+import com.contentanalytics.dto.ResetPasswordRequestDto;
+import com.contentanalytics.repository.EmailVerificationTokenRepository;
+import com.contentanalytics.repository.PasswordResetTokenRepository;
+import java.time.LocalDateTime;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -22,6 +32,8 @@ public class AuthController {
 
     private final AuthService authService;
     private final CookieUtil cookieUtil;
+    private final EmailVerificationTokenRepository emailVerificationTokenRepository;
+    private final PasswordResetTokenRepository passwordResetTokenRepository;
 
     /**
      * POST /api/auth/register
@@ -80,6 +92,237 @@ public class AuthController {
 
         // Return 200 OK with tokens
         return ResponseEntity.ok(tokenResponse);
+    }
+
+    /**
+     * POST /api/auth/verify-email
+     * Verify user's email with verification token
+     *
+     * Request body:
+     * {
+     *   "token": "eyJhbGciOiJIUzUxMiJ9..."
+     * }
+     *
+     * Response: 200 OK with success message
+     */
+    @PostMapping("/verify-email")
+    public ResponseEntity<ApiResponse> verifyEmail(
+            @Valid @RequestBody VerifyEmailRequestDto request) {
+
+        log.info("Email verification request");
+
+        try {
+            authService.verifyEmail(request.getToken());
+
+            ApiResponse response = ApiResponse.builder()
+                    .status(HttpStatus.OK.value())
+                    .message("Email verified successfully. You can now login.")
+                    .build();
+
+            return ResponseEntity.ok(response);
+
+        } catch (InvalidTokenException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(ApiResponse.builder()
+                            .status(HttpStatus.BAD_REQUEST.value())
+                            .message(e.getMessage())
+                            .build());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(ApiResponse.builder()
+                            .status(HttpStatus.CONFLICT.value())
+                            .message(e.getMessage())
+                            .build());
+        }
+    }
+
+    /**
+     * POST /api/auth/resend-verification-email
+     * Resend verification email to user
+     *
+     * Request body:
+     * {
+     *   "email": "user@example.com"
+     * }
+     *
+     * Response: 200 OK with success message
+     */
+    @PostMapping("/resend-verification-email")
+    public ResponseEntity<ApiResponse> resendVerificationEmail(
+            @Valid @RequestBody ResendVerificationEmailRequestDto request) {
+
+        log.info("Resend verification email request for: {}", request.getEmail());
+
+        try {
+            authService.resendVerificationEmail(request.getEmail());
+
+            ApiResponse response = ApiResponse.builder()
+                    .status(HttpStatus.OK.value())
+                    .message("Verification email sent. Please check your inbox.")
+                    .build();
+
+            return ResponseEntity.ok(response);
+
+        } catch (UserNotFoundException e) {
+            // Don't reveal if email exists (security best practice)
+            log.warn("Resend verification email for non-existent email: {}", request.getEmail());
+            ApiResponse response = ApiResponse.builder()
+                    .status(HttpStatus.OK.value())
+                    .message("If email exists in our system, verification email will be sent.")
+                    .build();
+            return ResponseEntity.ok(response);
+
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(ApiResponse.builder()
+                            .status(HttpStatus.CONFLICT.value())
+                            .message(e.getMessage())
+                            .build());
+        }
+    }
+
+    /**
+     * POST /api/auth/forgot-password
+     * Request password reset link
+     *
+     * Request body:
+     * {
+     *   "email": "user@example.com"
+     * }
+     *
+     * Response: 200 OK (always, for security - don't reveal if email exists)
+     */
+    @PostMapping("/forgot-password")
+    public ResponseEntity<ApiResponse> forgotPassword(
+            @Valid @RequestBody ForgotPasswordRequestDto request) {
+
+        log.info("Forgot password request for: {}", request.getEmail());
+
+        try {
+            authService.requestPasswordReset(request.getEmail());
+
+            // Always return success (don't reveal if email exists)
+            ApiResponse response = ApiResponse.builder()
+                    .status(HttpStatus.OK.value())
+                    .message("If an account exists with that email, a password reset link will be sent.")
+                    .build();
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("Error processing forgot password request", e);
+
+            // Still return generic message for security
+            ApiResponse response = ApiResponse.builder()
+                    .status(HttpStatus.OK.value())
+                    .message("If an account exists with that email, a password reset link will be sent.")
+                    .build();
+
+            return ResponseEntity.ok(response);
+        }
+    }
+
+    /**
+     * POST /api/auth/reset-password
+     * Reset password with valid reset token
+     *
+     * Request body:
+     * {
+     *   "token": "eyJhbGciOiJIUzUxMiJ9...",
+     *   "newPassword": "NewSecurePass123!"
+     * }
+     *
+     * Response: 200 OK with success message
+     */
+    @PostMapping("/reset-password")
+    public ResponseEntity<ApiResponse> resetPassword(
+            @Valid @RequestBody ResetPasswordRequestDto request) {
+
+        log.info("Password reset request");
+
+        try {
+            authService.resetPassword(request.getToken(), request.getNewPassword());
+
+            ApiResponse response = ApiResponse.builder()
+                    .status(HttpStatus.OK.value())
+                    .message("Password reset successfully. You can now login with your new password.")
+                    .build();
+
+            return ResponseEntity.ok(response);
+
+        } catch (InvalidTokenException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(ApiResponse.builder()
+                            .status(HttpStatus.BAD_REQUEST.value())
+                            .message(e.getMessage())
+                            .build());
+
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(ApiResponse.builder()
+                            .status(HttpStatus.BAD_REQUEST.value())
+                            .message(e.getMessage())
+                            .build());
+        }
+    }
+
+    /**
+     * GET /api/auth/verify-token/{token}
+     * Check if a reset/verification token is valid
+     *
+     * Path parameters:
+     * - token: verification or reset token
+     *
+     * Response: 200 OK if valid, 400 if invalid
+     */
+    @GetMapping("/verify-token/{token}")
+    public ResponseEntity<ApiResponse> verifyToken(
+            @PathVariable String token) {
+
+        log.debug("Token validation request");
+
+        try {
+            // Try as verification token first
+            var verificationToken = emailVerificationTokenRepository
+                    .findValidToken(token, LocalDateTime.now());
+
+            if (verificationToken.isPresent()) {
+                ApiResponse response = ApiResponse.builder()
+                        .status(HttpStatus.OK.value())
+                        .message("Valid verification token")
+                        .data(Map.of("type", "email_verification"))
+                        .build();
+                return ResponseEntity.ok(response);
+            }
+
+            // Try as password reset token
+            var resetToken = passwordResetTokenRepository
+                    .findValidToken(token, LocalDateTime.now());
+
+            if (resetToken.isPresent()) {
+                ApiResponse response = ApiResponse.builder()
+                        .status(HttpStatus.OK.value())
+                        .message("Valid password reset token")
+                        .data(Map.of("type", "password_reset"))
+                        .build();
+                return ResponseEntity.ok(response);
+            }
+
+            // Token not found or expired
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.builder()
+                            .status(HttpStatus.BAD_REQUEST.value())
+                            .message("Invalid or expired token")
+                            .build());
+
+        } catch (Exception e) {
+            log.error("Error verifying token", e);
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.builder()
+                            .status(HttpStatus.BAD_REQUEST.value())
+                            .message("Invalid or expired token")
+                            .build());
+        }
     }
 
     /**

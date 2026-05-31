@@ -52,6 +52,9 @@ public class User {
     @Column(nullable = false)
     private Boolean emailVerified;
 
+    @Column
+    private LocalDateTime emailVerifiedAt;
+
     @CreationTimestamp
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -62,6 +65,9 @@ public class User {
 
     @Column
     private LocalDateTime lastLoginAt;
+
+    @Column
+    private LocalDateTime lastPasswordResetAt;
 
     @Column
     private LocalDateTime lastPasswordChangeAt;
